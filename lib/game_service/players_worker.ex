@@ -28,10 +28,8 @@ defmodule GameService.PlayersWorker do
             report("Done")
           else
             key = String.lstrip(event.data["path"], ?/)
-            player = event.data["data"]
-            GameService.Bucket.put(players, key, player)
 
-            initialize_player_if_needed(players, key, player)
+            initialize_player_if_needed(players, key, event.data["data"])
           end
         end
 
@@ -48,17 +46,24 @@ defmodule GameService.PlayersWorker do
     player = all_players_map[key]
     initialize_player_if_needed(players, key, player)
 
-    GameService.Bucket.put(players, key, player)
     if Enum.count(Map.keys(all_players_map)) > 1 do
       import_all_players(players, Map.delete(all_players_map, key))
     end
   end
 
   defp initialize_player_if_needed(players, key, player) do
+    stored = GameService.Bucket.get(players, key)
+
+    if stored != nil do
+      player = Map.merge(stored, player)
+    end
+
+    report(inspect(player))
     if not Map.has_key?(player, "state") do
       report("Initializing player with ID=" <> key)
       player = Map.put(player, "state", "waiting for game")
       player_json = Map.put(%{}, key, player)
+      GameService.Bucket.put(players, key, player)
 
       case HTTPoison.patch @players_url, JSON.encode!(player_json) do
         {:ok, response} ->
@@ -69,6 +74,8 @@ defmodule GameService.PlayersWorker do
         {:error, response} ->
           report(inspect(response))
       end
+    else
+      GameService.Bucket.put(players, key, player)
     end
   end
 
@@ -76,7 +83,7 @@ defmodule GameService.PlayersWorker do
     unassigned_player_ids = GameService.Bucket.keys(players) |>
       Enum.filter(&not Map.has_key?(GameService.Bucket.get(players, &1), "game_id"))
 
-    if Enum.count(unassigned_player_ids) >= 4 do
+    if Enum.count(unassigned_player_ids) >= 2 do
       create_game(unassigned_player_ids, players)
 
       case HTTPoison.delete @game_lobby_url do
