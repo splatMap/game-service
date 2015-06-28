@@ -15,8 +15,8 @@ defmodule GameService.Supervisor do
     GameService.Registry.create(registry, "players")
 
     children = [
-      worker(GameService.CloudsWorker, [registry], function: :start),
-      worker(GameService.FindTeamWorker, [registry])
+      worker(GameService.ImageUploadsWorker, [registry], function: :start),
+      worker(GameService.PlayersWorker, [registry], function: :start_link)
     ]
 
     supervise(children, strategy: :one_for_one)

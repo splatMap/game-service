@@ -10,4 +10,8 @@ defmodule GameService.Bucket do
   def put(bucket, key, value) do
     Agent.update(bucket, &HashDict.put(&1, key, value))
   end
+
+  def keys(bucket) do
+    Agent.get(bucket, &HashDict.keys(&1))
+  end
 end
