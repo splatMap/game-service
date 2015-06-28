@@ -1,6 +1,7 @@
 defmodule GameService.PlayersWorker do
   @players_url "https://splatmap.firebaseio.com/players.json"
   @games_url "https://splatmap.firebaseio.com/games.json"
+  @game_lobby_url "https://splatmap.firebaseio.com/game_lobby.json"
 
   def start_link(registry) do
     process = spawn fn -> loop(registry) end
@@ -18,27 +19,23 @@ defmodule GameService.PlayersWorker do
         event = GameService.Event.new(chunk)
 
         report("Received event:" <> event.name)
-        case event.name do
-          _event_name ->
-            {:ok, players} = GameService.Registry.lookup(registry, "players")
+        {:ok, players} = GameService.Registry.lookup(registry, "players")
 
-            if event.data["data"] != nil do
-              if event.data["path"] == "/" do
-                report("Importing all player data")
-                import_all_players(players, event.data["data"])
-              else
-                key = String.lstrip(event.data["path"], ?/)
-                player = event.data["data"]
-                GameService.Bucket.put(players, key, player)
+        if event.data["data"] != nil do
+          if event.data["path"] == "/" do
+            report("Importing all player data")
+            import_all_players(players, event.data["data"])
+            report("Done")
+          else
+            key = String.lstrip(event.data["path"], ?/)
+            player = event.data["data"]
+            GameService.Bucket.put(players, key, player)
 
-                initialize_player_if_needed(players, key, player)
-              end
-            end
-
-            find_players_without_teams(players)
-
-          "keep-alive" ->
+            initialize_player_if_needed(players, key, player)
+          end
         end
+
+        find_players_without_teams(players)
 
       _ ->
     end
@@ -81,19 +78,41 @@ defmodule GameService.PlayersWorker do
 
     if Enum.count(unassigned_player_ids) >= 4 do
       create_game(unassigned_player_ids, players)
+
+      case HTTPoison.delete @game_lobby_url do
+        {:error, response} ->
+          report(inspect(response))
+
+        _ ->
+      end
+    else
+      lobby_data = %{
+        "player_ids" => unassigned_player_ids,
+        "player_names" => Enum.map(unassigned_player_ids, &GameService.Bucket.get(players, &1)["name"])
+      }
+      case HTTPoison.put @game_lobby_url, JSON.encode!(lobby_data) do
+        {:error, response} ->
+          report(inspect(response))
+
+        _ ->
+      end
     end
   end
 
   defp create_game(unassigned_player_ids, players) do
     report("Creating a new game...")
 
-    [red_team, blue_team | _] = Enum.chunk(unassigned_player_ids, 2)
-    red = {"Red Team", red_team}
-    blue = {"Blue Team", blue_team}
+    [red_team, blue_team | _] = Enum.chunk(unassigned_player_ids, 1)
+    red = {"Red", red_team}
+    blue = {"Blue", blue_team}
 
     game_json = [red, blue] |>
       Enum.reduce(%{ "state" => "playing" }, fn ({team_name, player_ids}, acc) -> (
-        Map.put(acc, team_name, %{ "player_ids" => player_ids, "score" => 0 })
+        Map.put(acc, team_name, %{
+          "player_ids" => player_ids,
+          "player_names" => Enum.map(player_ids, &GameService.Bucket.get(players, &1)["name"]),
+          "score" => 0
+        })
       ) end)
 
     case HTTPoison.post @games_url, JSON.encode!(game_json) do
